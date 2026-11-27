@@ -41,7 +41,23 @@ jobs:
           git fetch --no-tags upstream master
           git push origin upstream/master:refs/heads/master
 
+      # Upstream tags are fetched into a private namespace and checked before
+      # they reach ours: a tag in our release pattern (*-matx*) fails the run,
+      # because a tag here can never be deleted. A moved upstream tag is
+      # refused by the push and by the tags ruleset.
       - name: Copy new upstream tags
         run: |
-          git fetch upstream 'refs/tags/*:refs/tags/*'
-          git push origin --tags
+          git fetch --no-tags upstream '+refs/tags/*:refs/upstream-tags/*'
+          specs=()
+          for t in $(git for-each-ref --format='%(refname:strip=2)' refs/upstream-tags/); do
+            case "$t" in
+              *-matx*)
+                echo "::error::upstream tag $t is in the MatX release pattern; not copying tags"
+                exit 1
+                ;;
+            esac
+            specs+=("refs/upstream-tags/$t:refs/tags/$t")
+          done
+          if [ "${#specs[@]}" -gt 0 ]; then
+            git push origin "${specs[@]}"
+          fi
