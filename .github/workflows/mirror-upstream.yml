@@ -1,0 +1,63 @@
+# Keep `master` an exact, fast-forward-only copy of plazonic/cgroup_exporter
+# master, plus upstream's tags. MatX work lives on `matx`.
+#
+# No --force on purpose: if the push is refused, `master` has diverged from
+# upstream (someone committed to it, or upstream rewrote history), and that
+# needs a person to look at it. The repository rulesets also forbid
+# force-pushes to `master` and moving or deleting tags.
+#
+# GITHUB_TOKEN cannot push commits that change files under .github/workflows/,
+# so a run fails if upstream changes its own workflows. Fast-forward `master`
+# by hand in that case.
+name: Mirror upstream master
+
+on:
+  schedule:
+    # Mondays 05:23 UTC
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror-upstream
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Fast-forward master to upstream
+        run: |
+          git remote add upstream https://github.com/plazonic/cgroup_exporter.git
+          git fetch --no-tags upstream master
+          git push origin upstream/master:refs/heads/master
+
+      # Upstream tags are fetched into a private namespace and checked before
+      # they reach ours: a tag in our release pattern (*-matx*) fails the run,
+      # because a tag here can never be deleted. A moved upstream tag is
+      # refused by the push and by the tags ruleset.
+      - name: Copy new upstream tags
+        run: |
+          git fetch --no-tags upstream '+refs/tags/*:refs/upstream-tags/*'
+          specs=()
+          for t in $(git for-each-ref --format='%(refname:strip=2)' refs/upstream-tags/); do
+            case "$t" in
+              *-matx*)
+                echo "::error::upstream tag $t is in the MatX release pattern; not copying tags"
+                exit 1
+                ;;
+            esac
+            specs+=("refs/upstream-tags/$t:refs/tags/$t")
+          done
+          if [ "${#specs[@]}" -gt 0 ]; then
+            git push origin "${specs[@]}"
+          fi

@@ -1,0 +1,91 @@
+# Build and publish a MatX release of cgroup_exporter.
+#
+# Push a tag like v0.3.4-matx1 on a commit that is already on `matx`. The
+# workflow refuses tags on any other commit, builds a static linux/amd64
+# binary reproducibly, attests its provenance, and publishes a GitHub release
+# with the binary and SHA256SUMS. Releases are immutable once published.
+#
+# Reproduce a release locally (same Go version, from the tagged commit):
+#   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOTOOLCHAIN=go1.26.11 go build \
+#     -trimpath -buildvcs=false -ldflags "<LDFLAGS printed by the build step>" \
+#     -o cgroup_exporter .
+# and compare its sha256 with SHA256SUMS. Verify a downloaded binary with:
+#   gh attestation verify <binary> --repo MatX-inc/cgroup_exporter
+name: MatX release
+
+on:
+  push:
+    tags:
+      - "v*-matx*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: matx-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  # The runner's preinstalled go only launches the build: GOTOOLCHAIN makes it
+  # download exactly this release and verify it against sum.golang.org.
+  GO_VERSION: "1.26.11"
+  GOTOOLCHAIN: "go1.26.11"
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse tags that are not on matx
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/matx; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on matx; only reviewed commits are released"
+            exit 1
+          fi
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+          GOFLAGS: -mod=readonly
+        run: |
+          if [ "$(go env GOVERSION)" != "go${GO_VERSION}" ]; then
+            echo "::error::building with $(go env GOVERSION), not go${GO_VERSION}"
+            exit 1
+          fi
+          go version
+          version="${GITHUB_REF_NAME#v}"
+          pkg=github.com/prometheus/common/version
+          ldflags="-s -w -X ${pkg}.Version=${version} -X ${pkg}.Revision=${GITHUB_SHA} -X ${pkg}.Branch=matx -X ${pkg}.BuildUser=github-actions"
+          echo "LDFLAGS: ${ldflags}"
+          out="cgroup_exporter-${GITHUB_REF_NAME}-linux-amd64"
+          go build -trimpath -buildvcs=false -ldflags "${ldflags}" -o "${out}" .
+          sha256sum "${out}" > SHA256SUMS
+          cat SHA256SUMS
+          echo "BINARY=${out}" >> "$GITHUB_ENV"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ env.BINARY }}
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$BINARY" SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes "MatX build of cgroup_exporter from ${GITHUB_SHA} on matx, Go ${GO_VERSION}. Verify with: gh attestation verify ${BINARY} --repo ${GITHUB_REPOSITORY}"
