@@ -1,0 +1,26 @@
+# Dependency updates for the MatX fork. PRs target the default branch, matx.
+# Actions are pinned by full commit SHA (a repository rule); Dependabot keeps
+# the SHA and the version comment after it up to date.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns:
+          - "*"
