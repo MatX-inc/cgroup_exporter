@@ -14,7 +14,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/user"
@@ -511,6 +513,11 @@ func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 	level.Debug(e.logger).Log("msg", "Loading cgroup", "path", fullPath)
 	err := filepath.Walk(fullPath, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
+			// A job's cgroup can be removed between readdir and lstat when the
+			// job ends; skip it instead of aborting the walk for every job.
+			if errors.Is(err, fs.ErrNotExist) && p != fullPath {
+				return nil
+			}
 			return err
 		}
 		if info.IsDir() && jobMatch.MatchString(p) && !strings.HasSuffix(p, "/slurm") && !strings.HasSuffix(p, "/user") {
@@ -593,9 +600,9 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 				ch <- prometheus.MustNewConstMetric(e.info, prometheus.GaugeValue, 1, m.jobid, strconv.Itoa(m.uid), m.username)
 			}
 		}
-		ch <- prometheus.MustNewConstMetric(e.cpuUser, prometheus.GaugeValue, m.cpuUser, m.jobid, m.step, m.task)
-		ch <- prometheus.MustNewConstMetric(e.cpuSystem, prometheus.GaugeValue, m.cpuSystem, m.jobid, m.step, m.task)
-		ch <- prometheus.MustNewConstMetric(e.cpuTotal, prometheus.GaugeValue, m.cpuTotal, m.jobid, m.step, m.task)
+		ch <- prometheus.MustNewConstMetric(e.cpuUser, prometheus.CounterValue, m.cpuUser, m.jobid, m.step, m.task)
+		ch <- prometheus.MustNewConstMetric(e.cpuSystem, prometheus.CounterValue, m.cpuSystem, m.jobid, m.step, m.task)
+		ch <- prometheus.MustNewConstMetric(e.cpuTotal, prometheus.CounterValue, m.cpuTotal, m.jobid, m.step, m.task)
 		cpus := m.cpus
 		if cpus == 0 {
 			dir := filepath.Dir(n)
